@@ -1,8 +1,10 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
+const emoji = require("node-emoji");
 const path = require('path');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 const {
   convertCSV,
@@ -13,6 +15,80 @@ const fire = emoji.find('🔥');
 const dollar = emoji.find('💵');
 const blue_circle = emoji.find('🔵');
 
+// 🔥 Configurações da Supabase
+const supabaseUrl = 'https://bkjbkfujjftzqinwgyzg.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJramJrZnVqamZ0enFpbndneXpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkwNTg5NjUsImV4cCI6MjA2NDYzNDk2NX0.WE58NEs_CAHxCrWt22gcq6rH3d7xfiVXTR45qme51kM';
+const supabase = createClient(supabaseUrl, supabaseKey);
+const bucket = 'sessions';
+const sessionFolder = './.wwebjs_auth';
+
+// ✅ Função para baixar a sessão da Supabase
+async function downloadSession() {
+    try {
+        const { data, error } = await supabase.storage.from('sessions').list('.wwebjs_auth');
+        if (error) {
+            console.error('Erro ao listar:', error);
+            return;
+        }
+
+        if (!data || data.length === 0) {
+            console.log('⚠️ Nenhuma sessão encontrada na Supabase.');
+            return;
+        }
+
+        if (!fs.existsSync('./.wwebjs_auth')) {
+            fs.mkdirSync('./.wwebjs_auth');
+        }
+
+        for (const file of data) {
+            if (file.metadata && file.metadata.size === 0) {
+                console.log(`⚠️ Ignorando diretório ou arquivo vazio: ${file.name}`);
+                continue;
+            }
+
+            const { data: fileData, error: downloadError } = await supabase
+                .storage
+                .from('sessions')
+                .download(`.wwebjs_auth/${file.name}`);
+
+            if (downloadError) {
+                console.error('Erro no download:', downloadError);
+                continue;
+            }
+
+            const content = await fileData.arrayBuffer();
+            fs.writeFileSync(`./.wwebjs_auth/${file.name}`, Buffer.from(content));
+            console.log('✅ Baixado:', file.name);
+        }
+    } catch (err) {
+        console.error('Erro geral no download:', err);
+    }
+}
+
+// ✅ Função para enviar a sessão para Supabase
+function uploadSession() {
+    const folder = './.wwebjs_auth';
+
+    if (!fs.existsSync(folder)) {
+        console.log('Pasta de sessão não encontrada.');
+        return;
+    }
+
+    const files = fs.readdirSync(folder).filter(file => {
+        return fs.lstatSync(`${folder}/${file}`).isFile();
+    });
+
+    files.forEach(async file => {
+        const content = fs.readFileSync(`${folder}/${file}`);
+        const { error } = await supabase
+            .storage
+            .from('sessions')
+            .upload(`.wwebjs_auth/${file}`, content, { upsert: true });
+
+        if (error) console.error('❌ Erro ao enviar:', error);
+        else console.log('✅ Arquivo enviado:', file);
+    });
+}
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -27,6 +103,7 @@ const client = new Client({
   }
 });
 
+
 client.on('qr', async (qr) => {
   qrCodeBase64 = await qrcode.toDataURL(qr);
   qrcode.toFile(path.join(__dirname, 'qrcode.png'), qr);
@@ -36,6 +113,7 @@ client.on('qr', async (qr) => {
 client.on('ready', () => {
   console.log('🤖 Bot WhatsApp ONLINE!');
   botStatus = '✅ ONLINE';
+  uploadSession();
 });
 
 client.on('disconnected', () => {
@@ -43,7 +121,10 @@ client.on('disconnected', () => {
   botStatus = '❌ OFF';
 });
 
-client.initialize();
+// 🔥 Inicializar bot após baixar sessão
+downloadSession().then(() => {
+  client.initialize();
+});
 
 async function enviarMensagem() {
     const state = await client.getState();
