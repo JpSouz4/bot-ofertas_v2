@@ -179,5 +179,6 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => {
+  main()
   console.log(`Servidor rodando na porta ${PORT}`);
 });
