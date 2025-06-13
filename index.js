@@ -97,7 +97,7 @@ async function main() {
   if (temSessao) {
     console.log('🔐 Sessão encontrada no Supabase. Baixando...');
     await downloadFolder('.wwebjs_auth');
-    await downloadFolder('.wwebjs_cache');
+    //await downloadFolder('.wwebjs_cache');
   } else {
     console.log('🚨 Nenhuma sessão encontrada. O QR será gerado.');
     client.on('qr', async (qr) => {
@@ -116,7 +116,7 @@ client.on('ready', () => {
   uploadFolder('.wwebjs_auth');
   uploadFolder('.wwebjs_cache');
   limparLocal('.wwebjs_auth');
-  limparLocal('.wwebjs_cache');
+  //limparLocal('.wwebjs_cache');
 });
 
 client.on('disconnected', () => {
