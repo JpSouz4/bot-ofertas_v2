@@ -62,13 +62,6 @@ const PORT = process.env.PORT || 3000;
 let qrCodeBase64 = '';
 let botStatus = '❌ OFF';
 
-async function chamaSessao() {
-  await downloadFolder('.wwebjs_auth');
-  await downloadFolder('.wwebjs_cache');
-}
-
-chamaSessao();
-
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
@@ -77,13 +70,36 @@ const client = new Client({
   }
 });
 
-client.on('qr', async (qr) => {
+async function existeSessaoNoSupabase() {
+  const { data, error } = await supabase.storage.from('sessions').list('.wwebjs_auth');
+
+  if (error) {
+    console.error('Erro ao verificar sessão:', error);
+    return false;
+  }
+
+  // Verifica se há arquivos válidos
+  return Array.isArray(data) && data.length > 0;
+}
+
+async function main() {
+  const temSessao = await existeSessaoNoSupabase();
+
+  if (temSessao) {
+    console.log('🔐 Sessão encontrada no Supabase. Baixando...');
+    await downloadFolder('.wwebjs_auth');
+    await downloadFolder('.wwebjs_cache');
+  } else {
+    console.log('🚨 Nenhuma sessão encontrada. O QR será gerado.');
+    client.on('qr', async (qr) => {
   qrCodeBase64 = await qrcode.toDataURL(qr);
   qrcode.toFile(path.join(__dirname, 'qrcode.png'), qr);
   console.log('QR code atualizado');
 });
+  }
 
-client.initialize();
+  client.initialize(); // sua função que instancia o WhatsApp
+}
 
 client.on('ready', () => {
   console.log('🤖 Bot WhatsApp ONLINE!');
@@ -123,6 +139,7 @@ async function enviarMensagem() {
 
     } else {
         console.log('Bot desconectado.');
+        main();
     }
 }
 
