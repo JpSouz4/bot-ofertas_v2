@@ -5,23 +5,25 @@ const emoji = require("node-emoji");
 const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
-
-const {
-  convertCSV,
-  groupId
-} = require('./services.js');
+const { convertCSV, groupId } = require('./services.js');
 
 const fire = emoji.find('🔥');
 const dollar = emoji.find('💵');
 const blue_circle = emoji.find('🔵');
 
-// 🔥 Configurações da Supabase
+// 🔥 Supabase
 const supabaseUrl = 'https://bkjbkfujjftzqinwgyzg.supabase.co';
 const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJramJrZnVqamZ0enFpbndneXpnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkwNTg5NjUsImV4cCI6MjA2NDYzNDk2NX0.WE58NEs_CAHxCrWt22gcq6rH3d7xfiVXTR45qme51kM';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Express
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ✅ Função para baixar a sessão da Supabase
+let qrCodeBase64 = '';
+let botStatus = '❌ OFF';
+
+// ⬇️ Sessão Supabase
 async function downloadFolder(folderName) {
   const { data, error } = await supabase.storage.from('sessions').list(folderName);
   if (error || !data) return;
@@ -35,18 +37,14 @@ async function downloadFolder(folderName) {
   }
 }
 
-// ✅ Função para enviar a sessão para Supabase
-function uploadFolder(folderName) {
+async function uploadFolder(folderName) {
   if (!fs.existsSync(folderName)) return;
-
   const files = fs.readdirSync(folderName).filter(f => fs.lstatSync(`${folderName}/${f}`).isFile());
 
-  files.forEach(async file => {
+  for (const file of files) {
     const content = fs.readFileSync(`${folderName}/${file}`);
-    await supabase.storage
-      .from('sessions')
-      .upload(`${folderName}/${file}`, content, { upsert: true });
-  });
+    await supabase.storage.from('sessions').upload(`${folderName}/${file}`, content, { upsert: true });
+  }
 }
 
 function limparLocal(folderName) {
@@ -55,13 +53,12 @@ function limparLocal(folderName) {
   fs.rmdirSync(folderName);
 }
 
+async function existeSessaoNoSupabase() {
+  const { data, error } = await supabase.storage.from('sessions').list('.wwebjs_auth');
+  return Array.isArray(data) && data.length > 0;
+}
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-let qrCodeBase64 = '';
-let botStatus = '❌ OFF';
-
+// 🤖 WhatsApp Client
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
@@ -71,7 +68,6 @@ const client = new Client({
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--disable-infobars',
       '--window-size=1920,1080',
       '--single-process',
       '--no-zygote',
@@ -79,44 +75,23 @@ const client = new Client({
   }
 });
 
-async function existeSessaoNoSupabase() {
-  const { data, error } = await supabase.storage.from('sessions').list('.wwebjs_auth');
-
-  if (error) {
-    console.error('Erro ao verificar sessão:', error);
-    return false;
-  }
-
-  // Verifica se há arquivos válidos
-  return Array.isArray(data) && data.length > 0;
-}
-
-async function main() {
+// ✅ QR sempre definido antes do initialize
+client.on('qr', async (qr) => {
   const temSessao = await existeSessaoNoSupabase();
-
-  if (temSessao) {
-    console.log('🔐 Sessão encontrada no Supabase. Baixando...');
-    await downloadFolder('.wwebjs_auth');
-    //await downloadFolder('.wwebjs_cache');
-  } else {
-    console.log('🚨 Nenhuma sessão encontrada. O QR será gerado.');
-    client.on('qr', async (qr) => {
-  qrCodeBase64 = await qrcode.toDataURL(qr);
-  qrcode.toFile(path.join(__dirname, 'qrcode.png'), qr);
-  console.log('QR code atualizado');
-});
+  if (!temSessao) {
+    qrCodeBase64 = await qrcode.toDataURL(qr);
+    qrcode.toFile(path.join(__dirname, 'qrcode.png'), qr);
+    console.log('🔁 QR code gerado');
   }
+});
 
-  client.initialize(); // sua função que instancia o WhatsApp
-}
-
-client.on('ready', () => {
+client.on('ready', async () => {
   console.log('🤖 Bot WhatsApp ONLINE!');
   botStatus = '✅ ONLINE';
-  uploadFolder('.wwebjs_auth');
-  uploadFolder('.wwebjs_cache');
-  limparLocal('.wwebjs_auth');
-  //limparLocal('.wwebjs_cache');
+  await uploadFolder('.wwebjs_auth');
+  //limparLocal('.wwebjs_auth');
+
+  setInterval(enviarMensagem, 60000);
 });
 
 client.on('disconnected', () => {
@@ -125,60 +100,53 @@ client.on('disconnected', () => {
 });
 
 async function enviarMensagem() {
+  try {
     const state = await client.getState();
-
-    if (state === 'CONNECTED') {
-        const produto = await convertCSV();
-
-        const valorNumerico = parseFloat(produto.Price.replace(/[^\d.,]/g, '').replace(',', '.'));
-        const valorFormatado = valorNumerico.toLocaleString('pt-BR', {
-            style: 'currency',
-            currency: 'BRL'
-        });
-
-        const mensagem = `${fire.emoji} ${produto.ItemName} 
-                      \n ${dollar.emoji} Valor: ${valorFormatado}
-                      \n ${produto.Sales} pedidos
-                      \n Acesse o link: ${produto.OfferLink}
-                      \n ${blue_circle.emoji} Redes Sociais: `;
-
-        await client.sendMessage(groupId(), mensagem)
-            .then(() => console.log('Mensagem enviada:', mensagem))
-            .catch(err => console.error('Erro ao enviar:', err));
-
-    } else {
-        console.log('Bot desconectado.');
-        main();
+    if (state !== 'CONNECTED') {
+      console.log('⚠️ Cliente não está conectado.');
+      return;
     }
+
+    const produto = await convertCSV();
+    const valorNumerico = parseFloat(produto.Price.replace(/[^\d.,]/g, '').replace(',', '.'));
+    const valorFormatado = valorNumerico.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+    const mensagem = `${fire.emoji} ${produto.ItemName}
+${dollar.emoji} Valor: ${valorFormatado}
+${produto.Sales} pedidos
+Acesse o link: ${produto.OfferLink}
+${blue_circle.emoji} Redes Sociais: `;
+
+    await client.sendMessage(groupId(), mensagem);
+    console.log('✅ Mensagem enviada!');
+  } catch (err) {
+    console.error('❌ Erro ao enviar mensagem:', err);
+  }
 }
 
-// ⏳ Intervalo de envio (a cada 60 minutos → 3600000 ms)
-//setInterval(enviarMensagem, 1800000);
-setInterval(enviarMensagem, 60000);
-
-app.get('/status', (req, res) => {
-  res.send({ status: botStatus });
-});
-
+// 🌐 Express rotas
+app.get('/status', (req, res) => res.send({ status: botStatus }));
 app.get('/qrcode', (req, res) => {
-  if (qrCodeBase64) {
-    res.send(`<img src="${qrCodeBase64}" />`);
-  } else if (fs.existsSync('./qrcode.png')) {
-    res.sendFile(path.join(__dirname, 'qrcode.png'));
+  if (qrCodeBase64) return res.send(`<img src="${qrCodeBase64}" />`);
+  if (fs.existsSync('./qrcode.png')) return res.sendFile(path.join(__dirname, 'qrcode.png'));
+  res.send('QR Code não disponível.');
+});
+app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'views/dashboard.html')));
+app.get('/', (req, res) => res.send('🤖 Bot de Ofertas rodando. Acesse /status, /qrcode ou /dashboard'));
+
+// 🧠 Inicialização
+app.listen(PORT, async () => {
+  console.log(`🚀 Servidor iniciado na porta ${PORT}`);
+
+  const temSessao = await existeSessaoNoSupabase();
+
+  if (temSessao) {
+    console.log('🔐 Sessão encontrada. Baixando...');
+    await downloadFolder('.wwebjs_auth');
+    await new Promise(res => setTimeout(res, 1500)); // Delay p/ estabilidade
   } else {
-    res.send('QR Code não disponível. Bot já pode estar conectado.');
+    console.log('🚨 Nenhuma sessão encontrada. QR será gerado.');
   }
-});
 
-app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'views/dashboard.html'));
-});
-
-app.get('/', (req, res) => {
-  res.send('🤖 Bot de Ofertas rodando. Acesse /status, /qrcode ou /dashboard');
-});
-
-app.listen(PORT, () => {
-  main()
-  console.log(`Servidor rodando na porta ${PORT}`);
+  client.initialize();
 });
